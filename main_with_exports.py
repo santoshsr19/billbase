@@ -17,8 +17,8 @@ from models import (
     CatalogueItemIn, CatalogueItemOut,
     BillIn, BillOut, BillSummary, BillItemOut,
 )
-# from license import check_license, STATUS_EXPIRED, STATUS_INVALID, STATUS_MISSING
-from license import check_license, STATUS_EXPIRED
+from license import check_license, STATUS_EXPIRED, STATUS_INVALID, STATUS_MISSING
+
 # ── App ───────────────────────────────────────────────
 app = FastAPI(title="Sudev's Billing System API", version="1.0.0")
 
@@ -57,17 +57,17 @@ def favicon():
 def get_license_status():
     status, expiry, message = check_license()
     return {
-        "status": status,
-        "expiry": expiry,
+        "status":  status,
+        "expiry":  expiry,
         "message": message,
-        "blocked": status == STATUS_EXPIRED,
+        "blocked": status in (STATUS_EXPIRED, STATUS_INVALID, STATUS_MISSING),
     }
 
 
 # ── License guard — blocks writes when expired ────────
 def require_valid_license():
     status, _, message = check_license()
-    if status == STATUS_EXPIRED:
+    if status in (STATUS_EXPIRED, STATUS_INVALID, STATUS_MISSING):
         raise HTTPException(status_code=403, detail=f"License error: {message}")
 
 
@@ -111,27 +111,6 @@ def update_settings(data: SettingsIn):
     next_no = f"{d['bill_prefix']}-{str(d['counter']).zfill(4)}"
     return SettingsOut(**{k: d[k] for k in SettingsOut.__fields__ if k in d and k != 'next_bill_no'},
                        next_bill_no=next_no)
-
-from datetime import datetime
-
-ADMIN_PASSWORD = "sudev@2026"
-
-@app.post("/api/admin/update-expiry")
-def update_expiry(data: dict):
-    if data.get("password") != ADMIN_PASSWORD:
-        raise HTTPException(401, "Invalid password")
-
-    expiry_date = data.get("expiry_date")
-
-    conn = get_conn()
-    conn.execute(
-        "UPDATE settings SET expiry_date=? WHERE id=1",
-        (expiry_date,)
-    )
-    conn.commit()
-    conn.close()
-
-    return {"ok": True, "expiry_date": expiry_date}
 
 
 # ══════════════════════════════════════════════════════
@@ -304,28 +283,28 @@ def create_bill(data: BillIn):
         # ── Insert items
         for item in calced:
             conn.execute("""
-    		INSERT INTO bill_items (
-        		bill_id, name, qty, price,
-        		gst_rate, cgst_rate, sgst_rate,
-        		hsn_code,
-        		cgst_amt, sgst_amt,
-        		gst_amt, total
-    			)
-    		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		""", (
-		   	bill_id,
-			item["name"],
-    			item["qty"],
-    			item["price"],
-    			item["gst_rate"],
-    			item["cgst_rate"],
-    			item["sgst_rate"],
-    			item["hsn_code"],
-    			item["cgst_amt"],
-    			item["sgst_amt"],
-    			item["gst_amt"],
-    			item["total"]
-			))
+                INSERT INTO bill_items (
+    		bill_id, name, qty, price,
+    		gst_rate, cgst_rate, sgst_rate,
+    		hsn_code,
+    		cgst_amt, sgst_amt,
+    		gst_amt, total
+		)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+    		bill_id,
+    		item["name"],
+    		item["qty"],
+    		item["price"],
+   		item["gst_rate"],
+    		item["cgst_rate"],
+    		item["sgst_rate"],
+    		item["hsn_code"],
+    		item["cgst_amt"],
+    		item["sgst_amt"],
+    		item["gst_amt"],
+    		item["total"]
+		)
 
         conn.commit()
         bill = conn.execute("SELECT * FROM bills WHERE id=?", (bill_id,)).fetchone()
@@ -370,28 +349,28 @@ def update_bill(bill_id: int, data: BillIn):
         conn.execute("DELETE FROM bill_items WHERE bill_id=?", (bill_id,))
         for item in calced:
             conn.execute("""
-    		INSERT INTO bill_items (
-        		bill_id, name, qty, price,
-        		gst_rate, cgst_rate, sgst_rate,
-       	 		hsn_code,
-        		cgst_amt, sgst_amt,
-        		gst_amt, total
-    		)
-    		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		""", (
-    		bill_id,
-    		item["name"],
-    		item["qty"],
-    		item["price"],
-    		item["gst_rate"],
-    		item["cgst_rate"],
-    		item["sgst_rate"],
-    		item["hsn_code"],
-    		item["cgst_amt"],
-    		item["sgst_amt"],
-    		item["gst_amt"],
-    		item["total"]
-		))
+                INSERT INTO bill_items (
+    		bill_id, name, qty, price,
+    		gst_rate, cgst_rate, sgst_rate,
+    		hsn_code,
+    		cgst_amt, sgst_amt,
+    		gst_amt, total
+		)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+    			bill_id,
+    			item["name"],
+    			item["qty"],
+    			item["price"],
+    			item["gst_rate"],
+    			item["cgst_rate"],
+    			item["sgst_rate"],
+    			item["hsn_code"],
+    			item["cgst_amt"],
+   			item["sgst_amt"],
+    			item["gst_amt"],
+    			item["total"]
+			)
 
         conn.commit()
         bill  = conn.execute("SELECT * FROM bills WHERE id=?", (bill_id,)).fetchone()
