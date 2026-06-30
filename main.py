@@ -9,14 +9,44 @@ import json
 import csv
 import io
 import zipfile
-from datetime import datetime
-
+from datetime import date
 from database import get_conn, init_db, DB_PATH
 from models import (
     SettingsIn, SettingsOut,
     CatalogueItemIn, CatalogueItemOut,
     BillIn, BillOut, BillSummary, BillItemOut,
 )
+ 
+def current_fiscal_year() -> int:
+    """Returns the fiscal year LABEL (the year the FY ends in).
+    Apr 2025 - Mar 2026 -> 2026
+    Apr 2026 - Mar 2027 -> 2027
+    """
+    today = date.today()
+    # Jan, Feb, Mar (1,2,3) belong to the FY ending THIS calendar year.
+    # Apr..Dec (4-12) belong to the FY ending NEXT calendar year.
+    if today.month <= 3:
+        return today.year
+    return today.year + 1
+
+
+def fiscal_year_label(fy: int) -> str:
+    return f"{(fy - 1) % 100:02d}/{fy % 100:02d}"
+
+
+def normalize_bill_prefix(prefix: str, fy: int) -> str:
+    clean_prefix = (prefix or "INV").strip().rstrip("-/")
+    for suffix in (f"-{fy - 1}", f"-{fy}", f"-{fiscal_year_label(fy)}"):
+        if clean_prefix.endswith(suffix):
+            clean_prefix = clean_prefix[: -len(suffix)].rstrip("-/")
+    return clean_prefix or "INV"
+
+
+def format_bill_no(prefix: str, fy: int, counter: int) -> str:
+    clean_prefix = normalize_bill_prefix(prefix, fy)
+    return f"{clean_prefix}-{fiscal_year_label(fy)}-{counter:03d}"
+
+
 # from license import check_license, STATUS_EXPIRED, STATUS_INVALID, STATUS_MISSING
 from license import check_license, STATUS_EXPIRED
 # ── App ───────────────────────────────────────────────
@@ -76,20 +106,37 @@ def require_valid_license():
 # ══════════════════════════════════════════════════════
 
 def _next_bill_no(conn) -> str:
-    row = conn.execute("SELECT bill_prefix, counter FROM settings s JOIN bill_counter bc ON 1=1").fetchone()
-    return f"{row['bill_prefix']}-{str(row['counter']).zfill(4)}"
+    fy = current_fiscal_year()
+    conn.execute(
+        "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
+        (fy,),
+    )
+    row = conn.execute(
+        """
+        SELECT s.bill_prefix, bc.counter
+        FROM settings s JOIN bill_counter bc ON bc.fiscal_year=?
+        """,
+        (fy,),
+    ).fetchone()
+    return format_bill_no(row["bill_prefix"], fy, row["counter"])
 
 
 @app.get("/api/settings", response_model=SettingsOut)
 def get_settings():
     conn = get_conn()
+    fy = current_fiscal_year()
+    conn.execute(
+        "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
+        (fy,),
+    )
     row = conn.execute("""
         SELECT s.*, bc.counter
-        FROM settings s JOIN bill_counter bc ON 1=1
-    """).fetchone()
+        FROM settings s JOIN bill_counter bc ON bc.fiscal_year=?
+    """, (fy,)).fetchone()
     conn.close()
     d = dict(row)
-    next_no = f"{d['bill_prefix']}-{str(d['counter']).zfill(4)}"
+    d["bill_prefix"] = normalize_bill_prefix(d["bill_prefix"], fy)
+    next_no = format_bill_no(d["bill_prefix"], fy, d["counter"])
     return SettingsOut(**{k: d[k] for k in SettingsOut.__fields__ if k in d and k != 'next_bill_no'},
                        next_bill_no=next_no)
 
@@ -97,22 +144,30 @@ def get_settings():
 @app.put("/api/settings", response_model=SettingsOut)
 def update_settings(data: SettingsIn):
     conn = get_conn()
+    fy = current_fiscal_year()
+    bill_prefix = normalize_bill_prefix(data.bill_prefix, fy)
     conn.execute("""
         UPDATE settings SET
             biz_name=?, biz_addr=?, biz_phone=?, biz_email=?,
             biz_gstin=?, bill_prefix=?
         WHERE id=1
     """, (data.biz_name, data.biz_addr, data.biz_phone,
-          data.biz_email, data.biz_gstin, data.bill_prefix))
+          data.biz_email, data.biz_gstin, bill_prefix))
     conn.commit()
-    row = conn.execute("SELECT s.*, bc.counter FROM settings s JOIN bill_counter bc ON 1=1").fetchone()
+    conn.execute(
+        "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
+        (fy,),
+    )
+    row = conn.execute(
+        "SELECT s.*, bc.counter FROM settings s JOIN bill_counter bc ON bc.fiscal_year=?",
+        (fy,),
+    ).fetchone()
     conn.close()
     d = dict(row)
-    next_no = f"{d['bill_prefix']}-{str(d['counter']).zfill(4)}"
+    d["bill_prefix"] = normalize_bill_prefix(d["bill_prefix"], fy)
+    next_no = format_bill_no(d["bill_prefix"], fy, d["counter"])
     return SettingsOut(**{k: d[k] for k in SettingsOut.__fields__ if k in d and k != 'next_bill_no'},
                        next_bill_no=next_no)
-
-from datetime import datetime
 
 ADMIN_PASSWORD = "sudev@2026"
 
@@ -140,11 +195,25 @@ def update_expiry(data: dict):
 
 @app.get("/api/bills/next-number")
 def next_bill_number():
+    fy = current_fiscal_year()
     conn = get_conn()
-    row = conn.execute("SELECT s.bill_prefix, bc.counter FROM settings s JOIN bill_counter bc ON 1=1").fetchone()
+    row = conn.execute("SELECT bill_prefix FROM settings").fetchone()
+    prefix = row["bill_prefix"]
+ 
+    # Ensure a counter row exists for this fiscal year (starts at 1)
+    conn.execute(
+        "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
+        (fy,)
+    )
+    conn.commit()
+ 
+    counter = conn.execute(
+        "SELECT counter FROM bill_counter WHERE fiscal_year=?", (fy,)
+    ).fetchone()["counter"]
     conn.close()
-    return {"bill_no": f"{row['bill_prefix']}-{str(row['counter']).zfill(4)}"}
-
+ 
+    bill_no = format_bill_no(prefix, fy, counter)
+    return {"bill_no": bill_no}
 
 # ══════════════════════════════════════════════════════
 #  CATALOGUE
@@ -235,7 +304,6 @@ def _calc_item(item) -> dict:
         "total": total,
     }
 
-
 @app.get("/api/bills", response_model=List[BillSummary])
 def list_bills(
     search: Optional[str] = Query(None),
@@ -244,19 +312,19 @@ def list_bills(
 ):
     conn = get_conn()
     q = f"%{search}%" if search else "%"
-    rows = conn.execute("""
-        SELECT b.id, b.bill_no, b.bill_date, b.cust_name, b.grand_total, b.created_at,
-               COUNT(i.id) as item_count
-        FROM bills b
-        LEFT JOIN bill_items i ON i.bill_id = b.id
-        WHERE b.bill_no LIKE ? OR b.cust_name LIKE ?
-        GROUP BY b.id
-        ORDER BY b.id DESC
-        LIMIT ? OFFSET ?
-    """, (q, q, limit, offset)).fetchall()
+    rows = conn.execute(
+        "SELECT b.id, b.bill_no, b.bill_date, b.cust_name, b.grand_total, b.created_at, "
+        "COUNT(i.id) as item_count "
+        "FROM bills b "
+        "LEFT JOIN bill_items i ON i.bill_id = b.id "
+        "WHERE b.bill_no LIKE ? OR b.cust_name LIKE ? "
+        "GROUP BY b.id "
+        "ORDER BY b.id DESC "
+        "LIMIT ? OFFSET ?",
+        (q, q, limit, offset),
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
-
 
 @app.get("/api/bills/{bill_id}", response_model=BillOut)
 def get_bill(bill_id: int):
@@ -277,56 +345,80 @@ def create_bill(data: BillIn):
     require_valid_license()
     if not data.items:
         raise HTTPException(400, "Bill must have at least one item")
-
+ 
+    fy = current_fiscal_year()
     conn = get_conn()
     try:
         # ── Atomic bill number: lock counter row, increment, use
         conn.execute("BEGIN EXCLUSIVE")
-        row = conn.execute("SELECT s.bill_prefix, bc.counter FROM settings s JOIN bill_counter bc ON 1=1").fetchone()
-        bill_no = f"{row['bill_prefix']}-{str(row['counter']).zfill(4)}"
-        conn.execute("UPDATE bill_counter SET counter = counter + 1 WHERE id=1")
-
+ 
+        prefix = conn.execute("SELECT bill_prefix FROM settings").fetchone()["bill_prefix"]
+ 
+        conn.execute(
+            "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
+            (fy,)
+        )
+        counter_row = conn.execute(
+            "SELECT counter FROM bill_counter WHERE fiscal_year=?", (fy,)
+        ).fetchone()
+        counter = counter_row["counter"]
+ 
+        if counter > 9999:
+            conn.rollback()
+            conn.close()
+            raise HTTPException(
+                422,
+                f"Bill limit of 9999 reached for FY{fy}. "
+                f"Cannot create more bills this fiscal year."
+            )
+ 
+        bill_no = format_bill_no(prefix, fy, counter)
+        conn.execute(
+            "UPDATE bill_counter SET counter = counter + 1 WHERE fiscal_year=?",
+            (fy,)
+        )
+ 
         # ── Compute totals
         calced = [_calc_item(i) for i in data.items]
         subtotal  = round(sum(i["total"] - i["gst_amt"] for i in calced), 2)
         total_gst = round(sum(i["gst_amt"] for i in calced), 2)
         grand     = round(subtotal + total_gst, 2)
-
+ 
         # ── Insert bill
-        cur = conn.execute("""
+        cur = conn.execute('''
             INSERT INTO bills (bill_no, bill_date, due_date, cust_name, cust_addr,
                                cust_phone, cust_gstin, notes, subtotal, total_gst, grand_total)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """, (bill_no, data.bill_date, data.due_date, data.cust_name, data.cust_addr,
+        ''', (bill_no, data.bill_date, data.due_date, data.cust_name, data.cust_addr,
               data.cust_phone, data.cust_gstin, data.notes, subtotal, total_gst, grand))
         bill_id = cur.lastrowid
-
+ 
         # ── Insert items
         for item in calced:
-            conn.execute("""
-    		INSERT INTO bill_items (
-        		bill_id, name, qty, price,
-        		gst_rate, cgst_rate, sgst_rate,
-        		hsn_code,
-        		cgst_amt, sgst_amt,
-        		gst_amt, total
-    			)
-    		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-		""", (
-		   	bill_id,
-			item["name"],
-    			item["qty"],
-    			item["price"],
-    			item["gst_rate"],
-    			item["cgst_rate"],
-    			item["sgst_rate"],
-    			item["hsn_code"],
-    			item["cgst_amt"],
-    			item["sgst_amt"],
-    			item["gst_amt"],
-    			item["total"]
-			))
-
+            conn.execute('''
+                INSERT INTO bill_items (
+                    bill_id, name, qty, price,
+                    gst_rate, cgst_rate, sgst_rate,
+                    hsn_code,
+                    cgst_amt, sgst_amt,
+                    gst_amt, total
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ''', (
+                bill_id,
+                item["name"],
+                item["qty"],
+                item["price"],
+                item["gst_rate"],
+                item["cgst_rate"],
+                item["sgst_rate"],
+                item["hsn_code"],
+                item["cgst_amt"],
+                item["sgst_amt"],
+                item["gst_amt"],
+                item["total"]
+            ))
+ 
         conn.commit()
         bill = conn.execute("SELECT * FROM bills WHERE id=?", (bill_id,)).fetchone()
         items = conn.execute("SELECT * FROM bill_items WHERE bill_id=?", (bill_id,)).fetchall()
@@ -334,12 +426,12 @@ def create_bill(data: BillIn):
         d = dict(bill)
         d["items"] = [dict(i) for i in items]
         return d
-
+    except HTTPException:
+        raise
     except Exception as e:
         conn.rollback()
         conn.close()
         raise HTTPException(500, str(e))
-
 
 @app.put("/api/bills/{bill_id}", response_model=BillOut)
 def update_bill(bill_id: int, data: BillIn):

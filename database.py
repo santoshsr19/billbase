@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from datetime import date
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "billease.db")
 
@@ -16,6 +17,11 @@ def add_column_if_missing(conn, table, column, definition):
     cols = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})")]
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def current_fiscal_year() -> int:
+    today = date.today()
+    return today.year if today.month <= 3 else today.year + 1
 
 
 def init_db():
@@ -40,13 +46,33 @@ def init_db():
 
     # ── Bill counter
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS bill_counter (
-            id      INTEGER PRIMARY KEY DEFAULT 1,
-            counter INTEGER NOT NULL DEFAULT 1,
-            CHECK (id = 1)
+		CREATE TABLE IF NOT EXISTS bill_counter (
+    		fiscal_year INTEGER PRIMARY KEY,
+    		counter     INTEGER NOT NULL DEFAULT 1
+		)
+            """)
+
+    counter_cols = [row["name"] for row in cur.execute("PRAGMA table_info(bill_counter)")]
+    if "fiscal_year" not in counter_cols:
+        old_counter = cur.execute("SELECT counter FROM bill_counter LIMIT 1").fetchone()
+        old_value = old_counter["counter"] if old_counter else 1
+        cur.execute("ALTER TABLE bill_counter RENAME TO bill_counter_old")
+        cur.execute("""
+            CREATE TABLE bill_counter (
+                fiscal_year INTEGER PRIMARY KEY,
+                counter     INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        cur.execute(
+            "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, ?)",
+            (current_fiscal_year(), old_value),
         )
-    """)
-    cur.execute("INSERT OR IGNORE INTO bill_counter (id, counter) VALUES (1, 1)")
+        cur.execute("DROP TABLE bill_counter_old")
+    else:
+        cur.execute(
+            "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
+            (current_fiscal_year(),),
+        )
 
     # ── Catalogue
     cur.execute("""
@@ -112,4 +138,4 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print(f"[DB] Initialised → {DB_PATH}")
+    print(f"[DB] Initialised -> {DB_PATH}")
