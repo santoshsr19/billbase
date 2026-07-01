@@ -38,6 +38,9 @@ def init_db():
             biz_phone   TEXT    DEFAULT '',	
             biz_email   TEXT    DEFAULT '',
             biz_gstin   TEXT    DEFAULT '',
+            biz_state   TEXT    DEFAULT '',
+            bank_details TEXT   DEFAULT '',
+            default_terms TEXT  DEFAULT '',
             bill_prefix TEXT    DEFAULT 'INV',
             CHECK (id = 1)
         )
@@ -97,6 +100,8 @@ def init_db():
             cust_addr   TEXT    DEFAULT '',
             cust_phone  TEXT    DEFAULT '',
             cust_gstin  TEXT    DEFAULT '',
+            place_of_supply TEXT DEFAULT '',
+            tax_type    TEXT    DEFAULT 'intra',
             notes       TEXT    DEFAULT '',
             subtotal    REAL    DEFAULT 0,
             total_gst   REAL    DEFAULT 0,
@@ -135,6 +140,11 @@ def init_db():
     add_column_if_missing(conn, "bill_items", "cgst_amt", "REAL DEFAULT 0")
     add_column_if_missing(conn, "bill_items", "sgst_amt", "REAL DEFAULT 0")
     add_column_if_missing(conn, "settings", "expiry_date", "TEXT DEFAULT NULL")
+    add_column_if_missing(conn, "settings", "biz_state", "TEXT DEFAULT ''")
+    add_column_if_missing(conn, "settings", "bank_details", "TEXT DEFAULT ''")
+    add_column_if_missing(conn, "settings", "default_terms", "TEXT DEFAULT ''")
+    add_column_if_missing(conn, "bills", "place_of_supply", "TEXT DEFAULT ''")
+    add_column_if_missing(conn, "bills", "tax_type", "TEXT DEFAULT 'intra'")
 
     conn.commit()
     conn.close()

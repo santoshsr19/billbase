@@ -9,6 +9,9 @@ class SettingsIn(BaseModel):
     biz_phone: str = ""
     biz_email: str = ""
     biz_gstin: str = ""
+    biz_state: str = ""
+    bank_details: str = ""
+    default_terms: str = ""
     bill_prefix: str = "INV"
 
 
@@ -60,6 +63,8 @@ class BillIn(BaseModel):
     cust_addr: str = ""
     cust_phone: str = ""
     cust_gstin: str = ""
+    place_of_supply: str = ""
+    tax_type: str = "intra"
     notes: str = ""
     items: List[BillItemIn]
 
@@ -73,6 +78,8 @@ class BillOut(BaseModel):
     cust_addr: str
     cust_phone: str
     cust_gstin: str
+    place_of_supply: str = ""
+    tax_type: str = "intra"
     notes: str
     subtotal: float
     total_gst: float

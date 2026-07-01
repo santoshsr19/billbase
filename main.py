@@ -149,10 +149,11 @@ def update_settings(data: SettingsIn):
     conn.execute("""
         UPDATE settings SET
             biz_name=?, biz_addr=?, biz_phone=?, biz_email=?,
-            biz_gstin=?, bill_prefix=?
+            biz_gstin=?, biz_state=?, bank_details=?, default_terms=?, bill_prefix=?
         WHERE id=1
     """, (data.biz_name, data.biz_addr, data.biz_phone,
-          data.biz_email, data.biz_gstin, bill_prefix))
+          data.biz_email, data.biz_gstin, data.biz_state,
+          data.bank_details, data.default_terms, bill_prefix))
     conn.commit()
     conn.execute(
         "INSERT OR IGNORE INTO bill_counter (fiscal_year, counter) VALUES (?, 1)",
@@ -387,10 +388,12 @@ def create_bill(data: BillIn):
         # ── Insert bill
         cur = conn.execute('''
             INSERT INTO bills (bill_no, bill_date, due_date, cust_name, cust_addr,
-                               cust_phone, cust_gstin, notes, subtotal, total_gst, grand_total)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                               cust_phone, cust_gstin, place_of_supply, tax_type,
+                               notes, subtotal, total_gst, grand_total)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ''', (bill_no, data.bill_date, data.due_date, data.cust_name, data.cust_addr,
-              data.cust_phone, data.cust_gstin, data.notes, subtotal, total_gst, grand))
+              data.cust_phone, data.cust_gstin, data.place_of_supply, data.tax_type,
+              data.notes, subtotal, total_gst, grand))
         bill_id = cur.lastrowid
  
         # ── Insert items
@@ -451,12 +454,12 @@ def update_bill(bill_id: int, data: BillIn):
         conn.execute("""
             UPDATE bills SET
                 bill_date=?, due_date=?, cust_name=?, cust_addr=?,
-                cust_phone=?, cust_gstin=?, notes=?,
+                cust_phone=?, cust_gstin=?, place_of_supply=?, tax_type=?, notes=?,
                 subtotal=?, total_gst=?, grand_total=?,
                 updated_at=datetime('now','localtime')
             WHERE id=?
         """, (data.bill_date, data.due_date, data.cust_name, data.cust_addr,
-              data.cust_phone, data.cust_gstin, data.notes,
+              data.cust_phone, data.cust_gstin, data.place_of_supply, data.tax_type, data.notes,
               subtotal, total_gst, grand, bill_id))
 
         conn.execute("DELETE FROM bill_items WHERE bill_id=?", (bill_id,))
